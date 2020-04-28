@@ -1,61 +1,89 @@
-﻿using BlazorStyled.Stylesheets;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace BlazorStyled.Internal
 {
     internal class StyledImpl : IStyled
     {
         private const string DEFAULT = "Default";
-        private readonly IStyleSheet _styleSheet;
+        private readonly ScriptManager _scriptManager;
         private readonly string _id;
-        private readonly IGlobalStyles _globalStyles;
+        private readonly int _priority;
 
-        public IGlobalStyles GlobalStyles => _globalStyles;
-
-        public StyledImpl(IStyleSheet styleSheet) : this(styleSheet, DEFAULT)
+        public StyledImpl(ScriptManager scriptManager) : this(scriptManager, DEFAULT, 100_000)
         {
 
         }
 
-        private StyledImpl(IStyleSheet styleSheet, string id)
+        private StyledImpl(ScriptManager scriptManager, string id, int priority)
         {
-            _styleSheet = styleSheet;
+            _scriptManager = scriptManager;
             _id = id;
-            _globalStyles = new GlobalStyles(_id, _styleSheet);
+            _priority = priority;
+        }
+
+        public async Task<string> CssAsync(string className, string css)
+        {
+            try
+            {
+                css = css.RemoveComments().RemoveDuplicateSpaces();
+                IList<ParsedClass> parsedClasses = css.GetClasses(className);
+                if (parsedClasses.Count > 0)
+                {
+                    string hash = parsedClasses.First().IsMediaQuery ? parsedClasses.First().ChildClasses.First().Name.Replace(".", string.Empty) : parsedClasses.First().Name;
+                    await _scriptManager.UpdatedParsedClasses(_id.GetStableHashCodeString(), _id, _priority, parsedClasses);
+                    return hash;
+                }
+                else
+                {
+                    return string.Empty;
+                }
+            }
+            catch (StyledException e)
+            {
+                throw e;
+            }
+            catch (Exception e)
+            {
+                throw StyledException.GetException(css, e);
+            }
+        }
+
+        public Task<string> CssAsync(string css)
+        {
+            return CssAsync((string)null, css);
+        }
+
+        public async Task<string> CssAsync(List<string> classes, string css)
+        {
+            StringBuilder sb = new StringBuilder();
+            foreach (string cssClass in classes)
+            {
+                string result = await CssAsync(cssClass, css);
+                sb.Append(result).Append(' ');
+            }
+            return sb.ToString().Trim();
         }
 
         public string Css(string className, string css)
         {
             try
             {
-                css = css.RemoveDuplicateSpaces();
-                IRule rule;
-                if (className.IndexOf("@font-face") != -1)
+                css = css.RemoveComments().RemoveDuplicateSpaces();
+                IList<ParsedClass> parsedClasses = css.GetClasses(className);
+                if (parsedClasses.Count > 0)
                 {
-                    rule = ParseFontFace(css);
-                    _styleSheet.AddClass(rule, _id);
-                }
-                else if (className.IndexOf("@media") != -1)
-                {
-                    rule = ParseMediaQuery(className, "{" + css + "}");
-                    _styleSheet.AddClass(rule, _id);
+                    string hash = parsedClasses.First().IsMediaQuery ? parsedClasses.First().ChildClasses.First().Name.Replace(".", string.Empty) : parsedClasses.First().Name;
+                    Task.Run(() => _scriptManager.UpdatedParsedClasses(_id.GetStableHashCodeString(), _id, _priority, parsedClasses));
+                    return hash;
                 }
                 else
                 {
-                    rule = ParsePredefinedRuleSet(className, css);
-                    if (_elements.Contains(className))
-                    {
-                        _styleSheet.AddClass(rule, _id);
-                    }
-                    else
-                    {
-                        _styleSheet.AddClass(rule, _id);
-                    }
+                    return string.Empty;
                 }
-                return rule.Selector;
             }
             catch (StyledException e)
             {
@@ -69,28 +97,7 @@ namespace BlazorStyled.Internal
 
         public string Css(string css)
         {
-            try
-            {
-                css = css.RemoveDuplicateSpaces();
-                RuleSet ruleSet = ParseRuleSet(css);
-                if (ruleSet.Declarations.Count() > 0)
-                {
-                    _styleSheet.AddClass(ruleSet, _id);
-                }
-                foreach (IRule nestedRuleSet in ruleSet.NestedRules)
-                {
-                    _styleSheet.AddClass(nestedRuleSet, _id);
-                }
-                return ruleSet.Selector;
-            }
-            catch (StyledException e)
-            {
-                throw e;
-            }
-            catch (Exception e)
-            {
-                throw StyledException.GetException(css, e);
-            }
+            return Css((string)null, css);
         }
 
         public string Css(List<string> classes, string css)
@@ -104,14 +111,49 @@ namespace BlazorStyled.Internal
             return sb.ToString().Trim();
         }
 
+        public async Task<string> KeyframesAsync(string css)
+        {
+            try
+            {
+                css = "@keyframes &{" + css.RemoveComments().RemoveDuplicateSpaces() + "}";
+                IList<ParsedClass> parsedClasses = css.GetClasses();
+                await _scriptManager.UpdatedParsedClasses(_id.GetStableHashCodeString(), _id, _priority, parsedClasses);
+                return parsedClasses.First().Hash;
+            }
+            catch (StyledException e)
+            {
+                throw e;
+            }
+            catch (Exception e)
+            {
+                throw StyledException.GetException(css, e);
+            }
+        }
+
         public string Keyframes(string css)
         {
             try
             {
-                css = css.RemoveDuplicateSpaces();
-                Keyframe keyframe = ParseKeyframe(css);
-                _styleSheet.AddClass(keyframe, _id);
-                return keyframe.Selector;
+                css = "@keyframes &{" + css.RemoveComments().RemoveDuplicateSpaces() + "}";
+                IList<ParsedClass> parsedClasses = css.GetClasses();
+                Task.Run(() => _scriptManager.UpdatedParsedClasses(_id.GetStableHashCodeString(), _id, _priority, parsedClasses));
+                return parsedClasses.First().Hash;
+            }
+            catch (StyledException e)
+            {
+                throw e;
+            }
+            catch (Exception e)
+            {
+                throw StyledException.GetException(css, e);
+            }
+        }
+
+        public async Task FontfaceAsync(string css)
+        {
+            try
+            {
+                await CssAsync(css);
             }
             catch (StyledException e)
             {
@@ -127,9 +169,7 @@ namespace BlazorStyled.Internal
         {
             try
             {
-                css = css.RemoveDuplicateSpaces();
-                FontFace fontface = ParseFontFace(css);
-                _styleSheet.AddClass(fontface, _id);
+                Css(css);
             }
             catch (StyledException e)
             {
@@ -141,392 +181,75 @@ namespace BlazorStyled.Internal
             }
         }
 
+        public async Task ClearStylesAsync()
+        {
+            await _scriptManager.ClearStyles(_id.GetStableHashCodeString(), _id);
+        }
+
         public void ClearStyles()
         {
-            _styleSheet.ClearStyles(_id);
+            Task.Run(() => _scriptManager.ClearStyles(_id.GetStableHashCodeString(), _id));
+        }
+
+        public async Task AddGoogleFontsAsync(List<GoogleFont> googleFonts)
+        {
+            string fontString = string.Join("|", googleFonts.Select(googleFont => googleFont.Name.Replace(' ', '+') + ':' + string.Join(",", googleFont.Styles)));
+            string uri = $"//fonts.googleapis.com/css?family={fontString}&display=swap";
+            IList<ParsedClass> parsedClasses = new List<ParsedClass> { new ParsedClass(uri) };
+            await _scriptManager.UpdatedParsedClasses(_id.GetStableHashCodeString(), _id, _priority, parsedClasses);
         }
 
         public void AddGoogleFonts(List<GoogleFont> googleFonts)
         {
             string fontString = string.Join("|", googleFonts.Select(googleFont => googleFont.Name.Replace(' ', '+') + ':' + string.Join(",", googleFont.Styles)));
             string uri = $"//fonts.googleapis.com/css?family={fontString}&display=swap";
-            _styleSheet.AddClass(new ImportUri(uri), _id);
+            IList<ParsedClass> parsedClasses = new List<ParsedClass> { new ParsedClass(uri) };
+            Task.Run(() => _scriptManager.UpdatedParsedClasses(_id.GetStableHashCodeString(), _id, _priority, parsedClasses));
         }
 
         public IStyled WithId(string id)
         {
+            return WithId(id, 1000);  //Default to less than the default sheet (100,000)
+        }
+
+        public IStyled WithId(string id, int priority)
+        {
             if (string.IsNullOrEmpty(id))
             {
                 id = DEFAULT;
+                priority = 100_000;
             }
-            return new StyledImpl(_styleSheet, id.Replace(" ", "-"));
+            return new StyledImpl(_scriptManager, id.Replace(" ", "-"), priority);
         }
 
-        private IRule ParseMediaQuery(string classname, string css)
+        public async Task SetThemeValueAsync(string name, string value)
         {
-            IRule mediaQuery = new MediaQuery
-            {
-                Selector = classname
-            };
-            int first = css.IndexOf('{') + 1;
-            int last = css.LastIndexOf('}');
-            string parsed = css.Substring(first, last - first).Trim();
-            mediaQuery.AddNestedRules(ParseRuleSet(parsed).NestedRules.ToList());
-            return mediaQuery;
-        }
-
-        private Keyframe ParseKeyframe(string css)
-        {
-            Keyframe keyframe = new Keyframe();
-            IRule current = keyframe;
-            string buffer = string.Empty;
-            bool nestedClassClosed = true;
-            foreach (char ch in css)
-            {
-                switch (ch)
-                {
-                    case ';':
-                        Declaration declaration = ParseDeclaration(buffer.Trim());
-                        if (declaration != null)
-                        {
-                            current.AddDeclaration(declaration);
-                        }
-                        buffer = string.Empty;
-                        break;
-                    case '{':
-                        IRule nestedClass;
-                        nestedClass = new PredefinedRuleSet
-                        {
-                            Selector = buffer.Trim()
-                        };
-                        keyframe.AddNestedRule(nestedClass);
-                        buffer = string.Empty;
-                        current = nestedClass;
-                        nestedClassClosed = false;
-                        break;
-                    case '}':
-                        nestedClassClosed = true;
-                        break;
-                    default:
-                        buffer += ch;
-                        break;
-                }
-            }
-            if (!nestedClassClosed)
-            {
-                throw StyledException.GetException(css, "A nested class is missing a '}' character", null);
-            }
-            if (buffer.Trim() != string.Empty)
-            {
-                throw StyledException.GetException(buffer, "This is usually caused by a missing ';' character at the end of a declaration", null);
-            }
-            keyframe.SetClassName();
-            return keyframe;
-        }
-
-        private FontFace ParseFontFace(string css)
-        {
-            FontFace fontface = new FontFace();
-            fontface.AddDeclarations(ParseDeclarations(css));
-            fontface.SetClassName();
-            return fontface;
-        }
-
-        private PredefinedRuleSet ParsePredefinedRuleSet(string className, string css)
-        {
-            PredefinedRuleSet predefinedRuleSet = new PredefinedRuleSet { Selector = className.Trim() };
-            predefinedRuleSet.AddDeclarations(ParseDeclarations(css));
-            return predefinedRuleSet;
-        }
-
-        private List<Declaration> ParseDeclarations(string css)
-        {
-            List<Declaration> declarations = new List<Declaration>();
-            string[] declarationsString = css.Trim().Split(';');
-            foreach (string declarationString in declarationsString)
-            {
-                if (declarationString.IndexOf(':') != -1)
-                {
-                    Declaration declaration = ParseDeclaration(declarationString.Trim());
-                    if (declaration != null)
-                    {
-                        declarations.Add(declaration);
-                    }
-                }
-            }
-            return declarations;
-        }
-
-        private RuleSet ParseRuleSet(string css)
-        {
-            RuleSet root = new RuleSet
-            {
-                Label = _id != DEFAULT ? _id : null
-            };
-            IRule current = root;
-            IRule previous = root;
-            string buffer = string.Empty;
-            bool nestedClassClosed = true; //Start from true becuase the parent doesnt need to be closed
-            int i = 0;
-            do
-            {
-                char ch = css[i];
-                switch (ch)
-                {
-                    case ';':
-                        Declaration declaration = ParseDeclaration(buffer.Trim());
-                        if (declaration != null)
-                        {
-                            if (declaration.Property == "label")
-                            {
-                                current.Label = current.Label == null ? declaration.Value.Trim() : $"{current.Label}-{declaration.Value.Trim()}";
-                            }
-                            else
-                            {
-                                current.AddDeclaration(declaration);
-                            }
-                        }
-                        buffer = string.Empty;
-                        break;
-                    case '{':
-                        IRule nestedClass;
-                        if (buffer.IndexOf("@media") == -1)
-                        {
-                            nestedClass = new PredefinedRuleSet
-                            {
-                                Selector = buffer.Trim()
-                            };
-                            root.AddNestedRule(nestedClass);
-                            buffer = string.Empty;
-                            previous = current;
-                            current = nestedClass;
-                            nestedClassClosed = false;
-                        }
-                        else
-                        {
-                            nestedClassClosed = false;
-                            string innerCss = GetInnerClassCss(css, i);
-                            RuleSet mediaQueryClasses = ParseRuleSet(innerCss);
-
-                            bool isClassMediaQuery = mediaQueryClasses.Declarations.Count() > 0;
-                            string selector = isClassMediaQuery ? buffer.Trim() + "{&" : buffer.Trim();
-                            nestedClass = new MediaQuery
-                            {
-                                Selector = selector
-                            };
-                            root.AddNestedRule(nestedClass);
-                            if (isClassMediaQuery)
-                            {
-                                nestedClass.AddDeclarations(mediaQueryClasses.Declarations.ToList());
-                            }
-                            else
-                            {
-                                nestedClass.AddNestedRules(mediaQueryClasses.NestedRules.ToList());
-                            }
-                            i += innerCss.Length;
-                            previous = root;
-                            buffer = string.Empty;
-                        }
-                        break;
-                    case '}':
-                        nestedClassClosed = true;
-                        current = previous;
-                        previous = root;
-                        buffer = string.Empty;
-                        break;
-                    default:
-                        buffer += ch;
-                        break;
-                }
-                i++;
-            } while (i < css.Length);
-            if (!nestedClassClosed)
-            {
-                throw StyledException.GetException(css, "A nested class is missing a '}' character", null);
-            }
-            if (buffer.Trim() != string.Empty)
-            {
-                throw StyledException.GetException(buffer, "This is usually caused by a missing ';' character at the end of a declaration", null);
-            }
-            root.SetClassname();
-            return root;
-        }
-
-        private string GetInnerClassCss(string fullCss, int startFrom)
-        {
-            string startFromCss = fullCss.Substring(startFrom);
-            int start = startFromCss.IndexOf('{') + 1;
-            startFromCss = startFromCss.Substring(start);
-            int openBraces = 0;
-            int end = -1;
-            for (int i = 0; i < startFromCss.Length; i++)
-            {
-                char ch = startFromCss[i];
-                if (ch == '{')
-                {
-                    openBraces++;
-                }
-
-                if (ch == '}')
-                {
-                    openBraces--;
-                    if (openBraces < 0)
-                    {
-                        end = i;
-                        break;
-                    }
-                }
-            }
-            if (end == -1)
-            {
-                end = startFromCss.Length;
-            }
-
-            string css = startFromCss.Substring(start, end - start);
-            return css;
-        }
-
-        private Declaration ParseDeclaration(string input)
-        {
-            if (string.IsNullOrEmpty(input))
-            {
-                return null;
-            }
-
-            try
-            {
-                string property = input.Substring(0, input.IndexOf(':')).Trim();
-                string value = input.Substring(input.IndexOf(':') + 1).Trim();
-                return new Declaration { Property = property, Value = value };
-            }
-            catch (Exception e)
-            {
-                throw StyledException.GetException(input, "This is likely cause by a missing ':' character", e);
-            }
+            await _scriptManager.SetThemeValue(_id.GetStableHashCodeString(), _id, _priority, name, value);
         }
 
         public void SetThemeValue(string name, string value)
         {
-            _styleSheet.SetThemeValue(_id, name, value);
+            Task.Run(() => _scriptManager.SetThemeValue(_id.GetStableHashCodeString(), _id, _priority, name, value));
         }
 
-        public IEnumerable<KeyValuePair<string, string>> GetThemeValues()
+        public async Task<IDictionary<string, string>> GetThemeValuesAsync()
         {
-            return _styleSheet.GetThemeValues(_id);
+            return await _scriptManager.GetThemeValues(_id.GetStableHashCodeString());
         }
 
-        private readonly List<string> _elements = new List<string>
+        public string GetGlobalStyle(string name)
         {
-            "a",
-            "abbr",
-            "address",
-            "area",
-            "article",
-            "aside",
-            "audio",
-            "b",
-            "base",
-            "bdi",
-            "bdo",
-            "blockquote",
-            "body",
-            "br",
-            "button",
-            "canvas",
-            "caption",
-            "cite",
-            "code",
-            "col",
-            "colgroup",
-            "data",
-            "datalist",
-            "dd",
-            "del",
-            "details",
-            "dfn",
-            "dialog",
-            "div",
-            "dl",
-            "dt",
-            "em",
-            "embed",
-            "fieldset",
-            "figcaption",
-            "figure",
-            "footer",
-            "form",
-            "h1",
-            "h2",
-            "h3",
-            "h4",
-            "h5",
-            "h6",
-            "head",
-            "header",
-            "hr",
-            "html",
-            "i",
-            "iframe",
-            "img",
-            "input",
-            "ins",
-            "kbd",
-            "label",
-            "legend",
-            "li",
-            "link",
-            "main",
-            "map",
-            "mark",
-            "meta",
-            "meter",
-            "nav",
-            "noscript",
-            "object",
-            "ol",
-            "optgroup",
-            "option",
-            "output",
-            "p",
-            "param",
-            "picture",
-            "pre",
-            "progress",
-            "q",
-            "rp",
-            "rt",
-            "ruby",
-            "s",
-            "samp",
-            "script",
-            "section",
-            "select",
-            "small",
-            "source",
-            "span",
-            "strong",
-            "style",
-            "sub",
-            "summary",
-            "sup",
-            "svg",
-            "table",
-            "tbody",
-            "td",
-            "template",
-            "textarea",
-            "tfoot",
-            "th",
-            "thead",
-            "time",
-            "title",
-            "tr",
-            "track",
-            "u",
-            "ul",
-            "var",
-            "video",
-            "wbr"
-        };
+            return _scriptManager.GetGlobalStyle(_id.GetStableHashCodeString(), name);
+        }
+
+        public void SetGlobalStyle(string name, string classname)
+        {
+            _scriptManager.SetGlobalStyle(_id.GetStableHashCodeString(), name, classname);
+        }
+
+        public IDictionary<string, string> GetGlobalStyles()
+        {
+            return _scriptManager.GetGlobalStyles(_id.GetStableHashCodeString());
+        }
     }
 }

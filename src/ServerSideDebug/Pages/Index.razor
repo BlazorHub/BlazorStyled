@@ -1,11 +1,12 @@
 ﻿@page "/"
+@inject IStyled Styled
 
-<Styled @bind-Classname="@_p"> 
+<Styled @bind-Classname="@p">
     color: red;
 </Styled>
 
-<p class="@_p">Test</p>
+<p class="@p">This is a test</p>
 
 @code {
-    private string _p;
+    private string p;
 }

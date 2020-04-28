@@ -1,8 +1,6 @@
 ﻿using BlazorStyled.Internal;
-using BlazorStyled.Internal.Components;
-using BlazorStyled.Stylesheets;
 using Microsoft.AspNetCore.Components;
-using Microsoft.AspNetCore.Components.Rendering;
+using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
@@ -12,9 +10,11 @@ namespace BlazorStyled
     public class Styled : ComponentBase
     {
         private string _previousClassname;
+        private int _previousHash;
 
         [Parameter] public RenderFragment ChildContent { get; set; }
         [Parameter] public string Id { get; set; }
+        [Parameter] public int? Priority { get; set; }
         [Parameter] public string Classname { get; set; }
         [Parameter] public MediaQueries MediaQuery { get; set; } = MediaQueries.None;
         [Parameter] public bool IsKeyframes { get; set; }
@@ -24,33 +24,21 @@ namespace BlazorStyled
         [Parameter(CaptureUnmatchedValues = true)] public IReadOnlyDictionary<string, object> ComposeAttributes { get; set; }
 
         [Inject] private IStyled StyledService { get; set; }
-        [Inject] private IStyleSheet StyleSheet { get; set; }
 
-
-        protected override async Task OnParametersSetAsync()
+        protected override async Task OnAfterRenderAsync(bool firstRender)
         {
             await ProcessParameters();
         }
 
-        protected override async void BuildRenderTree(RenderTreeBuilder builder)
-        {
-            if (!StyleSheet.ScriptRendered && !StyleSheet.ScriptRendering)
-            {
-                if (await StyleSheet.BecomingScriptTag())
-                {
-                    builder.OpenComponent<Scripts>(1);
-                    builder.CloseComponent();
-                }
-            }
-        }
-
         private async Task ProcessParameters()
         {
-            IStyled styled = Id == null ? StyledService : StyledService.WithId(Id);
+            IStyled styled = Id == null ? StyledService : Priority.HasValue ? StyledService.WithId(Id, Priority.Value) : StyledService.WithId(Id);
+
             string classname = null;
 
             string content = ChildContent.RenderAsSimpleString();
-            if (content != null && content.Length > 0)
+            int _currentHash = CalculateHash(content);
+            if (content != null && content.Length > 0 && (_currentHash != _previousHash || _currentHash == _previousHash && ComposeAttributes != null))
             {
                 if (IsKeyframes)
                 {
@@ -64,15 +52,15 @@ namespace BlazorStyled
                 else if (MediaQuery != MediaQueries.None && ClassnameChanged.HasDelegate)
                 {
                     //If ClassnameChanged has a delegate then @bind-Classname was used and this is a "new" style
-                    //Otherwise Classname was used and this an existing style which will be handled in OnParametersSet
-                    content = WrapWithMediaQuery(content);
+                    //Otherwise Classname was used and this an existing style which will be handled below
+                    content = WrapWithMediaQuery("&{" + content + "}");
                     classname = styled.Css(content);
                 }
                 else if (Classname != null && MediaQuery != MediaQueries.None && !ClassnameChanged.HasDelegate && _previousClassname == null)
                 {
                     //Media query support for classes where an existing Classname already exists
-                    content = WrapWithMediaQuery(ApplyPseudoClass(Classname), content);
-                    styled.Css(GetMediaQuery(), content);
+                    content = WrapClass(ApplyPseudoClass(Classname), content);
+                    styled.Css(WrapWithMediaQuery(content));
                 }
                 else if (Classname == null && PseudoClass == PseudoClasses.None && MediaQuery != MediaQueries.None && _previousClassname == null)
                 {
@@ -81,12 +69,15 @@ namespace BlazorStyled
                 }
                 else if (Classname != null && PseudoClass != PseudoClasses.None && MediaQuery == MediaQueries.None && _previousClassname == null)
                 {
-                    content = WrapWithMediaQuery(ApplyPseudoClass(Classname), content);
+                    content = WrapClass(ApplyPseudoClass(Classname), content);
                     styled.Css(content);
                 }
                 else
                 {
-                    classname = styled.Css(content);
+                    if (PseudoClass == PseudoClasses.None && MediaQuery == MediaQueries.None)
+                    {
+                        classname = styled.Css(content);
+                    }
                 }
                 if (ComposeAttributes == null || !ClassnameChanged.HasDelegate)
                 {
@@ -112,10 +103,22 @@ namespace BlazorStyled
                     await NotifyChanged(classname);
                 }
             }
-            if (GlobalStyle != null & classname != null)
+            if (GlobalStyle != null & classname != null && _currentHash != _previousHash)
             {
-                StyledService.GlobalStyles[GlobalStyle] = classname;
+                _previousHash = _currentHash; // This needs to be done here even though it is also two lines down. Do not remove!
+                StyledService.SetGlobalStyle(GlobalStyle, classname);
             }
+            _previousHash = _currentHash;
+        }
+
+        private int CalculateHash(string content)
+        {
+            return content.GetStableHashCode() +
+                Id.GetStableHashCode() +
+                Classname.GetStableHashCode() +
+                Enum.GetName(typeof(MediaQueries), MediaQuery).GetStableHashCode() +
+                Enum.GetName(typeof(PseudoClasses), PseudoClass).GetStableHashCode() +
+                GlobalStyle.GetStableHashCode();
         }
 
         private IList<string> GetComposeClasses()
@@ -202,7 +205,7 @@ namespace BlazorStyled
             return $"{query}{{{content}}}";
         }
 
-        private string WrapWithMediaQuery(string classname, string content)
+        private string WrapClass(string classname, string content)
         {
             //If classname includes a dash it is a classname, otherwise it is html elements
             if (classname.IndexOf('-') != -1)
